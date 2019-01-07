@@ -12,16 +12,25 @@
 #endif
 
 #include <avr/pgmspace.h>
-#include <limits.h>
 #include <avr/sleep.h>
 #include <avr/power.h>
 #include <avr/wdt.h>
+#include <avr/eeprom.h>
+#include <limits.h>
 #include <Wire.h>
 #include <SoftwareSerial.h>
 #include <SdFat.h>
 #include "ds3231.h"
 
-#define RESP_SZ 1000
+#define RESP_SZ 200
+#define DEV_ID_EEPROM_LOC 0x00
+#define DEFAULT_TIMEOUT 5000
+#define MAX_HTTP_RETRIES 5
+#define POWER_RETRIES 5
+#define RTC_INTP 2
+#define VCC 3.3
+#define AREF 2.5
+#define CTRLZ 0x1A
 
 // for SIM5320 modem type
 enum
@@ -72,6 +81,7 @@ public:
     const uint8_t pinLevelSensor   = 24;
     const uint8_t pinGpsEnb        = 25;
     const uint8_t pinLevelEnb      = 27;
+    const uint8_t pinArefEnb       = 20;
 
     char respBuf[RESP_SZ];
     uint8_t rssi;
@@ -85,29 +95,33 @@ public:
     uint8_t getIntp();
     static void rtcIntp();
     boolean rtcIntpRcvd();
+    void poll();
 
     void drvrSend(const char* command);
     boolean drvrCheckResp(const char *expected, uint32_t timeout);
     boolean drvrCheckOK(uint32_t timeout);
     void drvrDumpResp();
-    void drvrFlushSerInput();
+    void drvrFlush();
     void drvrSleepMcu();
     uint32_t drvrElapsedTime(uint32_t);
     void drvrCmdEcho(boolean enable);
-    void drvrPowerOn();
+    boolean drvrPowerOn();
     boolean drvrPowerOff();
     boolean drvrReset();
     void drvrHardReset();
     void drvrFlightMode(boolean enable);
     float drvrGetVbat();
     float drvrGetVsol();
+    void drvrWriteDevId(uint16_t id);
+    uint16_t drvrReadDevId();
 
     void mgmtGetInfo();
     int8_t mgmtGetRSSI();
 
+
     boolean httpOpen(const char *url, uint16_t port);
     boolean httpSend(const char *dir, const char *url, const char *data, uint16_t len);
-    boolean httpGet(const char *url);
+    boolean httpGet(const char *dir, const char *url);
     boolean httpResp(const char *resp);
 
 //    void httpStart();
@@ -156,6 +170,7 @@ public:
     void gpsRadioOff();
     void gpsFlush();
     void gpsPoll();
+    void gpsPollTime();
     void gpsSendUBX(uint8_t *msg, uint8_t len);
     void gpsPowerSaveMode();
 

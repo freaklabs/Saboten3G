@@ -16,14 +16,8 @@
   #define DBG_PRINTLN(...)
 #endif
 
-#define DEFAULT_TIMEOUT 5000
-#define MAX_HTTP_RETRIES 3
-#define RTC_INTP 2
-#define VCC 3.3
-#define AREF 2.5
-#define CTRLZ 0x1A
 
-static char tmp[RESP_SZ];
+static char tmp[500];
 volatile boolean rtcFlag = false;
 
 /************************************************************************/
@@ -49,7 +43,7 @@ Saboten3G::Saboten3G()
     digitalWrite(pinCdet, HIGH);
 
     pinMode(pinLevelEnb, OUTPUT);
-    digitalWrite(pinLevelEnb, HIGH);
+    digitalWrite(pinLevelEnb, LOW);
 
     pinMode(pinGpsEnb, OUTPUT);
     digitalWrite(pinGpsEnb, LOW);
@@ -57,10 +51,13 @@ Saboten3G::Saboten3G()
     pinMode(pin3GRstN, OUTPUT);
     digitalWrite(pin3GRstN, HIGH);
 
+    pinMode(pinArefEnb, OUTPUT);
+    digitalWrite(pinArefEnb, LOW);
+
     pinMode(10, OUTPUT);
     digitalWrite(10, HIGH);
 
-    volatile boolean rtcFlag = false;
+    rtcFlag = false;
 
     Wire.begin();
 }
@@ -73,9 +70,6 @@ Saboten3G::Saboten3G()
 boolean Saboten3G::begin(HardwareSerial *port, SoftwareSerial *gpsSerial, HardwareSerial *debug)
 {
     uint8_t reg;
-
-    pinMode(A4, HIGH);
-    pinMode(A5, HIGH);
 
     ser = port;
     dbg = debug;
@@ -106,6 +100,21 @@ boolean Saboten3G::begin(HardwareSerial *port, SoftwareSerial *gpsSerial, Hardwa
 
     DBG_PRINTLN(F("Initialization complete"));
     return true;
+}
+
+/************************************************************************/
+// 
+//
+//
+/************************************************************************/
+void Saboten3G::poll()
+{
+    /*
+    if (ser->available())
+    {
+        dbg->write(ser->read());
+    }
+    */
 }
 
 /************************************************************************/
@@ -178,7 +187,7 @@ boolean Saboten3G::rtcIntpRcvd()
 //    flushSerInput
 //    Removes any data from receive input
 /************************************************************************/
-void Saboten3G::drvrFlushSerInput()
+void Saboten3G::drvrFlush()
 {
     while (ser->available() > 0)
     {
@@ -224,9 +233,8 @@ void Saboten3G::drvrCmdEcho(boolean enable)
 /************************************************************************/
 void Saboten3G::drvrSend(const char* command) 
 {
-    drvrFlushSerInput();
+    drvrFlush();
 
-    // send AT command
     sprintf(tmp, "%s\r\n", command);
     ser->print(tmp);
 }
@@ -240,9 +248,9 @@ boolean Saboten3G::drvrCheckResp(const char *expected, uint32_t timeout)
 {
     uint32_t now;
     boolean respRcvd = false;
-    char *pResp = respBuf;
+    uint16_t idx = 0;
 
-    memset(respBuf, 0, sizeof(respBuf));
+    memset(respBuf, 0, sizeof(respBuf)); // clear buffer to allow for string functions
       
     // check for response
     now = millis();
@@ -250,35 +258,41 @@ boolean Saboten3G::drvrCheckResp(const char *expected, uint32_t timeout)
     {
         if (ser->available() > 0)
         {
-            *pResp++ = ser->read(); 
-            if ((pResp - respBuf) > (RESP_SZ - 2))
+            char c = ser->read();
+            respBuf[idx++] = c;
+            if (idx == RESP_SZ-1)
             {
-              // we exceed the size of the response so quit
-              break;
-            }
-            
-            if (strstr(respBuf, expected) != NULL)
-            {
-                // we have a match
-                sprintf(tmp, "Correct response received: %s\r\n", respBuf);
-                dbg->print(tmp);
-                respRcvd = true;
                 break;
+            }
+
+            if (c == '\n')
+            {
+                idx = 0 ; // reset the index
+                if (strcmp(respBuf, expected) == 0)
+                {
+                    // we have a match
+                    sprintf(tmp, "Correct response received: %s\r\n", respBuf);
+                    dbg->print(tmp);
+                    respRcvd = true;
+                    break;
+                } 
+                memset(respBuf, 0, sizeof(respBuf));
             }
         }
     }
+    drvrFlush();
     return respRcvd;  
 }
 
 /************************************************************************/
 // 
-//
+//  
 //
 /************************************************************************/
 boolean Saboten3G::drvrCheckOK(uint32_t timeout)
 {
    
-    if (drvrCheckResp("\r\nOK\r\n", timeout))
+    if (drvrCheckResp("OK\r\n", timeout))
     {
       DBG_PRINTLN("Command Success");
       return true;
@@ -354,8 +368,15 @@ void Saboten3G::drvrSleepMcu()
 /**************************************************************************/
 float Saboten3G::drvrGetVbat()
 {
-    uint16_t bat = analogRead(pinVbatSense);
-    return (float)(bat*5.0/1023.0);
+    uint16_t bat;
+    float volts;
+
+    digitalWrite(pinArefEnb, HIGH);
+    delay(50);
+    bat = analogRead(pinVbatSense);
+    volts = (float)(bat * AREF/1023.0);
+    digitalWrite(pinArefEnb, LOW);
+    return (volts * 2.0);
 }   
 
 /**************************************************************************/
@@ -363,23 +384,73 @@ float Saboten3G::drvrGetVbat()
 /**************************************************************************/
 float Saboten3G::drvrGetVsol()
 {
-    uint16_t sol = analogRead(pinVsolSense);
-    return (float)(sol*5.0/1023.0);
+    uint16_t sol;
+    float volts;
+
+    digitalWrite(pinArefEnb, HIGH);
+    delay(50);
+    sol = analogRead(pinVsolSense);
+    volts = (float)(sol*AREF/1023.0);
+    digitalWrite(pinArefEnb, LOW);
+    return (volts * 2.0);
 }   
 
 /**************************************************************************/
 // 
 /**************************************************************************/
-void Saboten3G::drvrPowerOn()
+void Saboten3G::drvrWriteDevId(uint16_t id)
 {
-    digitalWrite(pinPwrButton, LOW);
-    delay(2000);
-    digitalWrite(pinPwrButton, HIGH);
-    drvrSend("AT\r\n");
-    while (drvrCheckOK(DEFAULT_TIMEOUT) == 0)
+    while(!eeprom_is_ready());
+    eeprom_write_block(&id, DEV_ID_EEPROM_LOC, 2);
+}
+
+/**************************************************************************/
+// 
+/**************************************************************************/
+uint16_t Saboten3G::drvrReadDevId()
+{
+    uint16_t id;
+    while(!eeprom_is_ready());
+    eeprom_read_block(&id, DEV_ID_EEPROM_LOC, 2);
+    return id;
+}
+
+/**************************************************************************/
+// 
+/**************************************************************************/
+boolean Saboten3G::drvrPowerOn()
+{
+    uint8_t resp = false;
+    
+    for (int i=0; i<POWER_RETRIES; i++)
     {
-        drvrSend("AT\r\n");
-    }    
+        DBG_PRINTLN("POWERON");
+        // turn on power switch for modem
+        digitalWrite(pinPwrButton, LOW);
+        delay(2000);
+        digitalWrite(pinPwrButton, HIGH);
+        delay(2000);
+
+        wdt_reset(); // kick the dog
+
+        // check to see if it powered up properly
+        if ((resp = drvrCheckResp("PB DONE\r\n", 7000)) == true)
+        {
+            break;
+        }
+
+        wdt_reset();
+        
+        // check to see if power is on. If it is, then break also
+        drvrSend("ATI\r\n");
+        if (drvrCheckOK(2000))
+        {
+            resp = true;
+            break;
+        }
+    }
+    
+    return resp;
 }
 
 /**************************************************************************/
@@ -387,8 +458,21 @@ void Saboten3G::drvrPowerOn()
 /**************************************************************************/
 boolean Saboten3G::drvrPowerOff()
 {
-    drvrSend("AT+CPOF");
-    return (drvrCheckOK(DEFAULT_TIMEOUT));
+    // check to see if power is on. If it is, then break also
+    for (int i=0; i<POWER_RETRIES; i++)
+    {
+        drvrSend("ATI\r\n");
+        if (drvrCheckOK(2000))
+        {
+            // turn off power switch for modem
+            digitalWrite(pinPwrButton, LOW);
+            delay(2000);
+            digitalWrite(pinPwrButton, HIGH);
+            delay(2000);
+            return true;
+        }
+    }
+    return false;
 }
 
 /**************************************************************************/
@@ -498,11 +582,12 @@ boolean Saboten3G::httpOpen(const char *url, uint16_t port)
         sprintf(tmp, "AT+CHTTPACT=\"%s\",%d\r\n", url, port);
         dbg->print(tmp);
         ser->print(tmp);
-        if (drvrCheckResp("+CHTTPACT: REQUEST", DEFAULT_TIMEOUT))
+        if (drvrCheckResp("+CHTTPACT: REQUEST\r\n", 7000))
         {
             return true;
         }
     }
+    dbg->print("Opening site failed\n");
     return false;
 }
 
@@ -513,11 +598,20 @@ boolean Saboten3G::httpOpen(const char *url, uint16_t port)
 /********************************************************************/
 boolean Saboten3G::httpSend(const char *dir, const char *url, const char *data, uint16_t len)
 {
-    char httpReq[500];
-    sprintf(httpReq, "POST /%s HTTP/1.1\r\nHost: %s\r\nContent-Type: text/csv\r\nCache-Control: no-cache\r\nContent-Length: %d\r\n\r\n%s\r\n\r\n", dir, url, len, data);
+    char httpReq[1000];
+
+    sprintf(httpReq, "POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: text/csv\r\nCache-Control: no-cache\r\nContent-Length: %d\r\n\r\n%s\r\n\r\n", dir, url, len, data);
     ser->print(httpReq);
     ser->write(CTRLZ); // terminate request
-    return drvrCheckOK(10000);
+
+    if (drvrCheckResp("http/1.0 200 ok\r\n", DEFAULT_TIMEOUT))
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
 }
 
 /********************************************************************/
@@ -525,13 +619,13 @@ boolean Saboten3G::httpSend(const char *dir, const char *url, const char *data, 
 //
 //
 /********************************************************************/
-boolean Saboten3G::httpGet(const char *url)
+boolean Saboten3G::httpGet(const char *dir, const char *url)
 {
     char httpReq[500];
-    sprintf(httpReq, "GET /devices HTTP/1.1\r\nHost: %s\r\nContent-Length: 0\r\n\r\n", url);
+    sprintf(httpReq, "GET %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 0\r\n\r\n", dir, url);
     ser->print(httpReq);
     ser->write(CTRLZ); // terminate request
-    return drvrCheckOK(10000);
+    return drvrCheckOK(7000);
 }
 
 /********************************************************************/
@@ -546,8 +640,6 @@ boolean Saboten3G::httpResp(const char *resp)
         return true;
     }
 }
-
-
 
 /********************************************************************/
 //
@@ -675,6 +767,14 @@ void Saboten3G::gpsPowerSaveMode()
 void Saboten3G::gpsPoll()
 {
     gps->println("$PUBX,00*33");
+}
+
+/**************************************************************************/
+// 
+/**************************************************************************/
+void Saboten3G::gpsPollTime()
+{
+    gps->println("$PUBX,04*37");
 }
 
 /**************************************************************************/
@@ -1106,9 +1206,15 @@ uint32_t Saboten3G::levelRead()
     uint32_t val = 0;
 
     levelOn();
+    digitalWrite(pinArefEnb, HIGH);
     delay(500);
 
+    float raw = analogRead(pinLevelSensor);
+    raw *= 5.004 * (AREF/VCC);  // datasheet spec: 5120 counts max / 1023 counts max for Arduino ADC = 5.004
+    val = raw;
     // average level readings over 10 readings
+      
+/*
     for (int i=0; i<16; i++)
     {
         float raw = analogRead(pinLevelSensor);
@@ -1116,9 +1222,9 @@ uint32_t Saboten3G::levelRead()
         val += raw;  
     }
     val >>= 4; // divide by 16
-
+*/
     levelOff();
-
+    digitalWrite(pinArefEnb, LOW);
     return val;
 }
 
