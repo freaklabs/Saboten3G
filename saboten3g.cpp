@@ -53,6 +53,9 @@ Saboten3G::Saboten3G()
 
     pinMode(pinGpsEnb, OUTPUT);
     digitalWrite(pinGpsEnb, LOW);
+    
+    pinMode(pin3GRstN, OUTPUT);
+    digitalWrite(pin3GRstN, HIGH);
 
     pinMode(10, OUTPUT);
     digitalWrite(10, HIGH);
@@ -81,6 +84,7 @@ boolean Saboten3G::begin(HardwareSerial *port, SoftwareSerial *gpsSerial, Hardwa
     ser->begin(115200);
     dbg->begin(57600);
     gps->begin(9600);
+
 
     DS3231_init(DS3231_INTCN);
 
@@ -138,8 +142,7 @@ uint8_t Saboten3G::getIntp()
 
         rtcClearAlarm(alm);
         rtcEnableAlarm(alm);
-
-        return alm;
+            return alm;
     }
     else
     {
@@ -182,6 +185,19 @@ void Saboten3G::drvrFlushSerInput()
         ser->read();
     }
 }
+
+/************************************************************************/
+//    reset 3G Module
+//    Reset 3G module
+/************************************************************************/
+void Saboten3G::drvrHardReset()
+{
+    digitalWrite(pin3GRstN, LOW);
+    delay(500);
+    digitalWrite(pin3GRstN, HIGH);
+    delay(500);
+}
+
 
 /************************************************************************/
 // 
@@ -235,7 +251,7 @@ boolean Saboten3G::drvrCheckResp(const char *expected, uint32_t timeout)
         if (ser->available() > 0)
         {
             *pResp++ = ser->read(); 
-            if ((pResp - respBuf) >= RESP_SZ)
+            if ((pResp - respBuf) > (RESP_SZ - 2))
             {
               // we exceed the size of the response so quit
               break;
@@ -292,8 +308,8 @@ void Saboten3G::drvrSleepMcu()
     uint8_t portBReg, portCReg, portDReg;
     uint8_t ddrBReg, ddrCReg, ddrDReg;
 
-    Serial.println("Sleeping MCU");
-    Serial.flush();
+    // LOG
+
 
     // disable UARTs
     UCSR0B = 0x00;
@@ -316,7 +332,8 @@ void Saboten3G::drvrSleepMcu()
 
     // write sleep mode
     set_sleep_mode(SLEEP_MODE_PWR_DOWN);
-    sleep_enable();                       // setting up for sleep ...
+    wdt_disable();      // disable watchdog while sleeping
+    sleep_enable();     // setting up for sleep ...
     sleep_mode();
     // sleeping here
 
@@ -410,6 +427,7 @@ void Saboten3G::drvrFlightMode(boolean enable)
     digitalWrite(pinFlightMode, val);
 }
 
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 3G Management related functions
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -493,13 +511,27 @@ boolean Saboten3G::httpOpen(const char *url, uint16_t port)
 //
 //
 /********************************************************************/
-boolean Saboten3G::httpSend(const char *url, const char *data, uint16_t len)
+boolean Saboten3G::httpSend(const char *dir, const char *url, const char *data, uint16_t len)
 {
     char httpReq[500];
-    sprintf(httpReq, "POST / HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nCache-Control: no-cache\r\nContent-Length: %d\r\n\r\n%s\r\n\r\n", url, len, data);
+    sprintf(httpReq, "POST /%s HTTP/1.1\r\nHost: %s\r\nContent-Type: text/csv\r\nCache-Control: no-cache\r\nContent-Length: %d\r\n\r\n%s\r\n\r\n", dir, url, len, data);
     ser->print(httpReq);
     ser->write(CTRLZ); // terminate request
-    return drvrCheckOK(DEFAULT_TIMEOUT);
+    return drvrCheckOK(10000);
+}
+
+/********************************************************************/
+//
+//
+//
+/********************************************************************/
+boolean Saboten3G::httpGet(const char *url)
+{
+    char httpReq[500];
+    sprintf(httpReq, "GET /devices HTTP/1.1\r\nHost: %s\r\nContent-Length: 0\r\n\r\n", url);
+    ser->print(httpReq);
+    ser->write(CTRLZ); // terminate request
+    return drvrCheckOK(10000);
 }
 
 /********************************************************************/
@@ -632,7 +664,7 @@ void Saboten3G::gpsQuiet()
 void Saboten3G::gpsPowerSaveMode() 
 {
   //Set GPS to Power Save Mode
-  uint8_t setPSM[] = { 0xB5, 0x62, 0x06, 0x11, 0x02, 0x00, 0x08, 0x01, 0x22, 0x92 };
+  uint8_t setPSM[] = { 0xB5, 0x62, 0x06, 0x11, 0x02, 0x00, 0x08, 0x01, 0x1A, 0x9D };
   gpsSendUBX(setPSM, sizeof(setPSM)/sizeof(uint8_t));
 }
 
@@ -703,6 +735,7 @@ struct ts Saboten3G::rtcGetTime()
 void Saboten3G::rtcPrintTime(char *datetime)
 {
   struct ts time = rtcGetTime();
+  memset(tmp, 0, sizeof(tmp));
   sprintf(tmp, "%02d:%02d:%02d", time.hour, time.min, time.sec);
   memcpy(datetime, tmp, strlen(tmp)+1);
 }
@@ -713,6 +746,7 @@ void Saboten3G::rtcPrintTime(char *datetime)
 void Saboten3G::rtcPrintDate(char *datetime)
 {
   struct ts time = rtcGetTime();
+  memset(tmp, 0, sizeof(tmp));
   sprintf(tmp, "%04d/%02d/%02d", time.year, time.mon, time.mday);
   memcpy(datetime, tmp, strlen(tmp)+1);
 }
@@ -724,6 +758,7 @@ void Saboten3G::rtcPrintDate(char *datetime)
 void Saboten3G::rtcPrintTimeAndDate(char *datetime)
 {
   struct ts time = rtcGetTime();
+  memset(tmp, 0, sizeof(tmp));
   sprintf(tmp, "%04d/%02d/%02d,%02d:%02d:%02d", time.year, time.mon, time.mday, time.hour, time.min, time.sec);
   memcpy(datetime, tmp, strlen(tmp)+1);
 }
@@ -734,6 +769,7 @@ void Saboten3G::rtcPrintTimeAndDate(char *datetime)
 void Saboten3G::rtcPrintFullTime(char *datetime)
 {
   struct ts time = rtcGetTime();
+  memset(tmp, 0, sizeof(tmp));
   sprintf(tmp, "%02d/%02d/%02d %02d:%02d:%02d", time.year-2000, time.mon, time.mday, time.hour, time.min, time.sec);
   memcpy(datetime, tmp, strlen(tmp)+1);
 }
@@ -922,9 +958,10 @@ void Saboten3G::rtcDisableAlarm(uint8_t alarm)
 /**************************************************************************/
 // 
 /**************************************************************************/
-float Saboten3G::rtcGetTemp()
+uint8_t Saboten3G::rtcGetTemp()
 {
-    return DS3231_get_treg();
+    float temp = DS3231_get_treg();
+    return round(temp);
 }
 
 

@@ -21,7 +21,7 @@
 #include <SdFat.h>
 #include "ds3231.h"
 
-#define RESP_SZ 500
+#define RESP_SZ 1000
 
 // for SIM5320 modem type
 enum
@@ -45,9 +45,9 @@ enum
 
 enum
 {
-    NO_ALARM,
-    MINUTE_ALARM,
-    HOUR_ALARM
+    NO_ALARM = 0,
+    MINUTE_ALARM = 1,
+    HOUR_ALARM = 2
 };
 
 class Saboten3G 
@@ -67,6 +67,7 @@ public:
     const uint8_t pinDtr           = 22;
     const uint8_t pinFlightMode    = 30;
     const uint8_t pinRtcIntp       = 6;
+    const uint8_t pin3GRstN        = 8;
     const uint8_t pinSdSeln        = 19;
     const uint8_t pinLevelSensor   = 24;
     const uint8_t pinGpsEnb        = 25;
@@ -96,6 +97,7 @@ public:
     void drvrPowerOn();
     boolean drvrPowerOff();
     boolean drvrReset();
+    void drvrHardReset();
     void drvrFlightMode(boolean enable);
     float drvrGetVbat();
     float drvrGetVsol();
@@ -104,7 +106,8 @@ public:
     int8_t mgmtGetRSSI();
 
     boolean httpOpen(const char *url, uint16_t port);
-    boolean httpSend(const char *url, const char *data, uint16_t len);
+    boolean httpSend(const char *dir, const char *url, const char *data, uint16_t len);
+    boolean httpGet(const char *url);
     boolean httpResp(const char *resp);
 
 //    void httpStart();
@@ -139,7 +142,7 @@ public:
     void rtcClearAlarm(uint8_t alarm);
     void rtcEnableAlarm(uint8_t alarm);
     void rtcDisableAlarm(uint8_t alarm);
-    float rtcGetTemp();
+    uint8_t rtcGetTemp();
 
     void levelOn();
     void levelOff();
